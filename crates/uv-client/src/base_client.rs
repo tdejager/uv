@@ -1,13 +1,14 @@
 use pep508_rs::MarkerEnvironment;
 use platform_tags::Platform;
 use reqwest::{Client, ClientBuilder};
-use reqwest_middleware::ClientWithMiddleware;
+use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use std::env;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::debug;
 use uv_auth::AuthMiddleware;
 use uv_configuration::KeyringProviderType;
@@ -19,6 +20,16 @@ use crate::linehaul::LineHaul;
 use crate::middleware::OfflineMiddleware;
 use crate::Connectivity;
 
+#[derive(Clone, Default)]
+pub struct CustomMiddleware {
+    pub middleware: Vec<Arc<dyn Middleware>>,
+}
+impl Debug for CustomMiddleware {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomMiddleware").finish()
+    }
+}
+
 /// A builder for an [`BaseClient`].
 #[derive(Debug, Clone)]
 pub struct BaseClientBuilder<'a> {
@@ -29,6 +40,7 @@ pub struct BaseClientBuilder<'a> {
     client: Option<Client>,
     markers: Option<&'a MarkerEnvironment>,
     platform: Option<&'a Platform>,
+    custom_middleware: CustomMiddleware,
 }
 
 impl Default for BaseClientBuilder<'_> {
@@ -47,6 +59,7 @@ impl BaseClientBuilder<'_> {
             client: None,
             markers: None,
             platform: None,
+            custom_middleware: CustomMiddleware::default(),
         }
     }
 }
@@ -91,6 +104,18 @@ impl<'a> BaseClientBuilder<'a> {
     #[must_use]
     pub fn platform(mut self, platform: &'a Platform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    #[must_use]
+    pub fn add_middleware<M: Middleware>(mut self, middleware: M) -> Self {
+        self.custom_middleware.middleware.push(Arc::new(middleware));
+        self
+    }
+
+    #[must_use]
+    pub fn custom_middleware(mut self, custom_middleware: CustomMiddleware) -> Self {
+        self.custom_middleware = custom_middleware;
         self
     }
 
@@ -161,19 +186,27 @@ impl<'a> BaseClientBuilder<'a> {
         // Wrap in any relevant middleware.
         let client = match self.connectivity {
             Connectivity::Online => {
-                let client = reqwest_middleware::ClientBuilder::new(client.clone());
+                let mut client = reqwest_middleware::ClientBuilder::new(client.clone());
 
-                // Initialize the retry strategy.
-                let retry_policy =
-                    ExponentialBackoff::builder().build_with_max_retries(self.retries);
-                let retry_strategy = RetryTransientMiddleware::new_with_policy(retry_policy);
-                let client = client.with(retry_strategy);
+                // Use custom middleware instead if provided
+                if !self.custom_middleware.middleware.is_empty() {
+                    for middleware in &self.custom_middleware.middleware {
+                        client = client.with_arc(middleware.clone());
+                    }
+                    client.build()
+                } else {
+                    // Initialize the retry strategy.
+                    let retry_policy =
+                        ExponentialBackoff::builder().build_with_max_retries(self.retries);
+                    let retry_strategy = RetryTransientMiddleware::new_with_policy(retry_policy);
+                    let client = client.with(retry_strategy);
 
-                // Initialize the authentication middleware to set headers.
-                let client =
-                    client.with(AuthMiddleware::new().with_keyring(self.keyring.to_provider()));
+                    // Initialize the authentication middleware to set headers.
+                    let client =
+                        client.with(AuthMiddleware::new().with_keyring(self.keyring.to_provider()));
 
-                client.build()
+                    client.build()
+                }
             }
             Connectivity::Offline => reqwest_middleware::ClientBuilder::new(client.clone())
                 .with(OfflineMiddleware)

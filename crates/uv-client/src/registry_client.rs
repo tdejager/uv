@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_http_range_reader::AsyncHttpRangeReader;
 use futures::{FutureExt, TryStreamExt};
 use http::HeaderMap;
 use reqwest::{Client, Response, StatusCode};
+use reqwest_middleware::Middleware;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -25,6 +27,7 @@ use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_normalize::PackageName;
 
+use crate::base_client::CustomMiddleware;
 use crate::base_client::{BaseClient, BaseClientBuilder};
 use crate::cached_client::CacheControl;
 use crate::html::SimpleHtml;
@@ -45,6 +48,7 @@ pub struct RegistryClientBuilder<'a> {
     client: Option<Client>,
     markers: Option<&'a MarkerEnvironment>,
     platform: Option<&'a Platform>,
+    custom_middleware: CustomMiddleware,
 }
 
 impl RegistryClientBuilder<'_> {
@@ -60,6 +64,7 @@ impl RegistryClientBuilder<'_> {
             client: None,
             markers: None,
             platform: None,
+            custom_middleware: CustomMiddleware::default(),
         }
     }
 }
@@ -125,6 +130,12 @@ impl<'a> RegistryClientBuilder<'a> {
         self
     }
 
+    #[must_use]
+    pub fn add_middleware<M: Middleware>(mut self, middleware: M) -> Self {
+        self.custom_middleware.middleware.push(Arc::new(middleware));
+        self
+    }
+
     pub fn build(self) -> RegistryClient {
         // Build a base client
         let mut builder = BaseClientBuilder::new();
@@ -145,6 +156,7 @@ impl<'a> RegistryClientBuilder<'a> {
             .retries(self.retries)
             .connectivity(self.connectivity)
             .native_tls(self.native_tls)
+            .custom_middleware(self.custom_middleware)
             .keyring(self.keyring)
             .build();
 
