@@ -2,13 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use async_http_range_reader::AsyncHttpRangeReader;
 use futures::{FutureExt, TryStreamExt};
 use http::HeaderMap;
 use reqwest::{Client, Response, StatusCode};
-use reqwest_middleware::Middleware;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -24,10 +22,9 @@ use platform_tags::Platform;
 use pypi_types::{Metadata23, SimpleJson};
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_configuration::IndexStrategy;
-use uv_configuration::KeyringProviderType;
 use uv_normalize::PackageName;
 
-use crate::base_client::CustomMiddleware;
+use crate::base_client::MiddlewareStack;
 use crate::base_client::{BaseClient, BaseClientBuilder};
 use crate::cached_client::CacheControl;
 use crate::html::SimpleHtml;
@@ -40,15 +37,13 @@ use crate::{CachedClient, CachedClientError, Error, ErrorKind};
 pub struct RegistryClientBuilder<'a> {
     index_urls: IndexUrls,
     index_strategy: IndexStrategy,
-    keyring: KeyringProviderType,
     native_tls: bool,
-    retries: u32,
     connectivity: Connectivity,
     cache: Cache,
     client: Option<Client>,
     markers: Option<&'a MarkerEnvironment>,
     platform: Option<&'a Platform>,
-    custom_middleware: CustomMiddleware,
+    middleware_stack: MiddlewareStack,
 }
 
 impl RegistryClientBuilder<'_> {
@@ -56,15 +51,13 @@ impl RegistryClientBuilder<'_> {
         Self {
             index_urls: IndexUrls::default(),
             index_strategy: IndexStrategy::default(),
-            keyring: KeyringProviderType::default(),
             native_tls: false,
             cache,
             connectivity: Connectivity::Online,
-            retries: 3,
             client: None,
             markers: None,
             platform: None,
-            custom_middleware: CustomMiddleware::default(),
+            middleware_stack: MiddlewareStack::default(),
         }
     }
 }
@@ -83,20 +76,8 @@ impl<'a> RegistryClientBuilder<'a> {
     }
 
     #[must_use]
-    pub fn keyring(mut self, keyring_type: KeyringProviderType) -> Self {
-        self.keyring = keyring_type;
-        self
-    }
-
-    #[must_use]
     pub fn connectivity(mut self, connectivity: Connectivity) -> Self {
         self.connectivity = connectivity;
-        self
-    }
-
-    #[must_use]
-    pub fn retries(mut self, retries: u32) -> Self {
-        self.retries = retries;
         self
     }
 
@@ -131,8 +112,8 @@ impl<'a> RegistryClientBuilder<'a> {
     }
 
     #[must_use]
-    pub fn add_middleware<M: Middleware>(mut self, middleware: M) -> Self {
-        self.custom_middleware.middleware.push(Arc::new(middleware));
+    pub fn middleware_stack(mut self, middleware_stack: MiddlewareStack) -> Self {
+        self.middleware_stack = middleware_stack;
         self
     }
 
@@ -153,11 +134,9 @@ impl<'a> RegistryClientBuilder<'a> {
         }
 
         let client = builder
-            .retries(self.retries)
             .connectivity(self.connectivity)
             .native_tls(self.native_tls)
-            .custom_middleware(self.custom_middleware)
-            .keyring(self.keyring)
+            .middleware_stack(self.middleware_stack)
             .build();
 
         let timeout = client.timeout();
