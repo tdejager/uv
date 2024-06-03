@@ -116,7 +116,11 @@ pub(crate) async fn pip_compile(
     let client_builder = BaseClientBuilder::new()
         .connectivity(connectivity)
         .native_tls(native_tls)
-        .middleware_stack(MiddlewareStack::new(3, keyring_provider));
+        .middleware_stack(
+            MiddlewareStack::default()
+                .with_retries(3)
+                .with_auth(keyring_provider),
+        );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
@@ -287,7 +291,11 @@ pub(crate) async fn pip_compile(
         .connectivity(connectivity)
         .index_urls(index_locations.index_urls())
         .index_strategy(index_strategy)
-        .middleware_stack(MiddlewareStack::new(3, keyring_provider))
+        .middleware_stack(
+            MiddlewareStack::default()
+                .with_retries(3)
+                .with_auth(keyring_provider),
+        )
         .markers(&markers)
         .platform(interpreter.platform())
         .build();

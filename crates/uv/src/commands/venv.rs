@@ -174,7 +174,11 @@ async fn venv_impl(
             .native_tls(native_tls)
             .index_urls(index_locations.index_urls())
             .index_strategy(index_strategy)
-            .middleware_stack(MiddlewareStack::new(3, keyring_provider))
+            .middleware_stack(
+                MiddlewareStack::default()
+                    .with_retries(3)
+                    .with_auth(keyring_provider),
+            )
             .connectivity(connectivity)
             .markers(interpreter.markers())
             .platform(interpreter.platform())

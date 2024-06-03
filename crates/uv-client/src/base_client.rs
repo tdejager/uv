@@ -22,39 +22,38 @@ use crate::middleware::OfflineMiddleware;
 use crate::Connectivity;
 
 /// Newtype to implement [`Debug`] on [`Middleware`].
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MiddlewareStack(Vec<Arc<dyn Middleware>>);
 
 impl MiddlewareStack {
-    /// Use a custom middleware stack, skipping the default retry and auth layers.
+    /// Add an arbitrary middleware layer.
     // This function exists for rustlib users.
-    pub fn custom(middleware_stack: Vec<Arc<dyn Middleware>>) -> Self {
-        Self(middleware_stack)
+    pub fn with(mut self, middleware: impl Into<Arc<dyn Middleware>>) -> Self {
+        self.0.push(middleware.into());
+        self
     }
 
-    /// Initialize the middleware stack, using an [`ExponentialBackoff`] with the given number of
-    /// retries and an [`AuthMiddleware`] layer with the given keyring provider.
-    pub fn new(retries: u32, keyring: KeyringProviderType) -> Self {
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(retries);
-        let retry_strategy = RetryTransientMiddleware::new_with_policy(retry_policy);
+    /// Add an [`ExponentialBackoff`] layer with the given number of retries.
+    pub fn with_retries(mut self, retries: u32) -> Self {
+        if retries > 0 {
+            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(retries);
+            let retry_strategy = RetryTransientMiddleware::new_with_policy(retry_policy);
+            self.0.push(Arc::new(retry_strategy))
+        }
+        self
+    }
 
+    /// Add an [`AuthMiddleware`] layer with the given keyring provider.
+    pub fn with_auth(mut self, keyring: KeyringProviderType) -> Self {
         let auth_middleware = AuthMiddleware::new().with_keyring(keyring.to_provider());
-
-        Self(vec![Arc::new(retry_strategy), Arc::new(auth_middleware)])
-    }
-}
-
-impl Default for MiddlewareStack {
-    /// Initialize the default middleware stack, consisting of an [`ExponentialBackoff`] retry
-    /// strategy and an [`AuthMiddleware`] layer not using the keyring.
-    fn default() -> Self {
-        Self::new(3, KeyringProviderType::default())
+        self.0.push(Arc::new(auth_middleware));
+        self
     }
 }
 
 impl Debug for MiddlewareStack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CustomMiddleware").finish()
+        f.debug_struct("MiddlewareStack").finish()
     }
 }
 
